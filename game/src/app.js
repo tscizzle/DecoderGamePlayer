@@ -1,20 +1,20 @@
-import React, { Component } from 'react';
+import React, { Component } from "react";
 
-import initializeGame from 'initialize-game';
+import initializeGame from "initialize-game";
 
-import 'stylesheets/app.css';
+import "stylesheets/app.css";
 
 class App extends Component {
-  containerId = 'game-container';
+  CONTAINER_ID = "game-container";
 
   componentDidMount() {
-    initializeGame({ parent: this.containerId });
+    initializeGame({ parent: this.CONTAINER_ID });
   }
 
   render() {
     return (
       <div className="app">
-        <div id={this.containerId} />
+        <div id={this.CONTAINER_ID} />
       </div>
     );
   }
