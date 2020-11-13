@@ -1,7 +1,7 @@
-import Phaser from 'phaser';
+import Phaser from "phaser";
 
-import { GAME_WIDTH, GAME_HEIGHT } from 'game-constants';
-import MainScene from 'main-scene';
+import { GAME_WIDTH, GAME_HEIGHT } from "game-constants";
+import MainScene from "main-scene";
 
 const initializeGame = ({ parent }) => {
   const gameConfig = {
@@ -9,7 +9,10 @@ const initializeGame = ({ parent }) => {
     height: GAME_HEIGHT,
     scene: [MainScene],
     physics: {
-      default: 'arcade',
+      default: "arcade",
+      arcade: {
+        debug: true,
+      },
     },
     type: Phaser.AUTO,
     parent,

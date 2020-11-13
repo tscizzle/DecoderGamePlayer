@@ -108,6 +108,24 @@ class Player:
             self.gameState = gameState
 
 
+class Decoder:
+    """Decoder of the player's measurements into game commands."""
+
+    def __init__(self):
+        pass
+
+    def decode(self, measurements):
+        """Given measurements of the player, predict what that player is trying to do in
+        the game and thus output game commands.
+
+        :param np.array measurements: same structure as Player.measurements
+
+        :return gameCommands: see WebSocket API of the game for how to structure
+            commands
+        """
+        pass
+
+
 def main():
     HOST = "localhost"
     PORT = 1530
