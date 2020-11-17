@@ -1,4 +1,4 @@
-import _, { max } from "lodash";
+import _ from "lodash";
 import Phaser from "phaser";
 
 import { connect, send } from "ws-client";
@@ -30,6 +30,7 @@ class MainScene extends Phaser.Scene {
       this.SCREEN_CENTER.x,
       this.SCREEN_CENTER.y
     );
+    this.playerCursor.setSize(this.PLAYER_SIZE * 2, this.PLAYER_SIZE * 2);
     const star = this.add.star(
       0,
       0,
@@ -80,13 +81,11 @@ class MainScene extends Phaser.Scene {
     direction.normalize().scale(this.MOVE_GAIN);
     // Move the player.
     this.playerCursor.body.setVelocity(direction.x, direction.y);
-
     /* Reaching the target */
     this.physics.overlap(this.playerCursor, this.target, () => {
       const newPosition = this.getNewTargetPosition();
       this.target.setPosition(newPosition.x, newPosition.y);
     });
-
     /* Send out a game state update message. */
     this.sendGameStateUpdateMsg();
   }
