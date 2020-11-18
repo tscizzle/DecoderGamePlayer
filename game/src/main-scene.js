@@ -8,16 +8,6 @@ class MainScene extends Phaser.Scene {
   PLAYER_WS_HOST = "localhost";
   PLAYER_WS_PORT = 1530;
 
-  constructor() {
-    super("MainScene");
-
-    connect({
-      host: this.PLAYER_WS_HOST,
-      port: this.PLAYER_WS_PORT,
-      onmessage: (msg) => console.log(msg),
-    });
-  }
-
   /* MAIN PHASER METHODS */
 
   create() {
@@ -63,8 +53,16 @@ class MainScene extends Phaser.Scene {
     this.physics.add.existing(this.target);
     this.target.body.setCircle(this.TARGET_SIZE);
 
-    /* Control */
+    /* Controls */
     this.moveControls = this.input.keyboard.createCursorKeys();
+    this.queuedCommands = {};
+
+    /* Connect to Player WebSocket server */
+    connect({
+      host: this.PLAYER_WS_HOST,
+      port: this.PLAYER_WS_PORT,
+      handleMessage: this.handleWsMsg,
+    });
   }
 
   update() {
@@ -81,40 +79,30 @@ class MainScene extends Phaser.Scene {
     } else if (this.moveControls.up.isDown) {
       direction.y = -1;
     }
+    /* TODO: if there is anything in this.queuedCommands, grab the keys, take
+    the command with the latest timestring, apply it to get the movement
+    direction, then delete the grabbed keys from this.queuedCommands (this
+    keys technique avoids concurrency issues like a normal array would have).
+    */
+    console.log(_.size(this.queuedCommands));
     // Set the magnitude based on the configured speed.
     direction.normalize().scale(this.MOVE_GAIN);
     // Move the player.
     this.playerCursor.body.setVelocity(direction.x, direction.y);
+
     /* Reaching the target */
     this.physics.overlap(this.playerCursor, this.target, () => {
       const newPosition = this.getNewTargetPosition();
       this.target.setPosition(newPosition.x, newPosition.y);
     });
+
     /* Send out a game state update message. */
     this.sendGameStateUpdateMsg();
   }
 
   // HELPERS
 
-  sendGameStateUpdateMsg() {
-    /* Construct a summary object of the game state (player position, target
-      position, etc.) and send it to the Player component via WebSocket.
-    */
-    const gameState = {
-      playerCursor: {
-        x: this.playerCursor.body.x,
-        y: this.playerCursor.body.y,
-      },
-      target: { x: this.target.body.x, y: this.target.body.y },
-    };
-    const gameStateMsg = {
-      TYPE: "GAME_UPDATE",
-      PAYLOAD: { gameState },
-    };
-    send(JSON.stringify(gameStateMsg));
-  }
-
-  getNewTargetPosition() {
+  getNewTargetPosition = () => {
     /* Return a random new target position ({ x, y }) but make sure it is not
       trivially close to the cursor already.
     
@@ -140,7 +128,42 @@ class MainScene extends Phaser.Scene {
     }
     // If we reach here, something is wrong.
     throw "Unable to find new target position.";
-  }
+  };
+
+  handleWsMsg = (msgObj) => {
+    /* Handle an incoming WebSocket message. */
+    const { TYPE, PAYLOAD } = msgObj;
+
+    if (TYPE === "GAME_COMMAND") {
+      const commandId = Math.random();
+      this.queuedCommands[commandId] = PAYLOAD;
+    } else {
+      console.info(`Unrecognized TYPE: ${TYPE}`);
+    }
+  };
+
+  sendGameStateUpdateMsg = () => {
+    /* Construct a summary object of the game state (player position, target
+      position, etc.) and send it to the Player component via WebSocket.
+    */
+    const gameState = {
+      playerCursor: {
+        x: this.playerCursor.body.x,
+        y: this.playerCursor.body.y,
+        radius: this.PLAYER_SIZE,
+      },
+      target: {
+        x: this.target.body.x,
+        y: this.target.body.y,
+        radius: this.PLAYER_SIZE,
+      },
+    };
+    const gameStateMsg = {
+      TYPE: "GAME_UPDATE",
+      PAYLOAD: { gameState },
+    };
+    send(JSON.stringify(gameStateMsg));
+  };
 }
 
 export default MainScene;

@@ -1,7 +1,7 @@
 let ws = null;
 let reconnectTimerId = null;
 
-export const connect = ({ host, port, onmessage }) => {
+export const connect = ({ host, port, handleMessage }) => {
   ws = new WebSocket(`ws://${host}:${port}`);
 
   ws.onopen = (ev) => {
@@ -12,8 +12,11 @@ export const connect = ({ host, port, onmessage }) => {
     }
   };
 
-  if (onmessage) {
-    ws.onmessage = onmessage;
+  if (handleMessage) {
+    ws.onmessage = (event) => {
+      const msgObj = JSON.parse(event.data);
+      handleMessage(msgObj);
+    };
   }
 
   ws.onclose = (ev) => {

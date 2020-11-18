@@ -1,7 +1,9 @@
 import json
 import asyncio
+from datetime import datetime, timezone
 
 import websockets
+import websockets.exceptions
 import numpy as np
 
 
@@ -83,11 +85,17 @@ class Player:
         """
         gameCommandInterval = 0.01
         while True:
-            gameCommands = self.decoder.decode(self.measurements)
-            ## TODO: make this use gameCommands, so the player is actually playing the
-            ##      game according to the decoder's output.
             if self.websocket is not None:
-                await self.websocket.send(json.dumps({"move": {"x": 1, "y": -2}}))
+                gameCommand = self.decoder.decode(self.measurements)
+                msgDict = {
+                    "TYPE": "GAME_COMMAND",
+                    "PAYLOAD": gameCommand
+                }
+                msg = json.dumps(msgDict)
+                try:
+                    await self.websocket.send(msg)
+                except websockets.exceptions.ConnectionClosed:
+                    self.websocket = None
             await asyncio.sleep(gameCommandInterval)
 
     async def connectionHandler(self, websocket, path):
@@ -126,17 +134,21 @@ class Decoder:
 
     def decode(self, measurements):
         """Given measurements of the player, predict what that player is trying to do in
-        the game and thus output game commands.
+        the game and thus output a game command.
 
         :param np.array measurements: same structure as Player.measurements
 
-        :return dict[] gameCommands: see WebSocket API of the game for how to structure
+        :return dict gameCommand: see WebSocket API of the game for how to structure
             commands
         """
         ## TODO: make this actually figure out what `measurements` is saying about the
         ##      game (this is where we'll employ our learning techniques, like neural
         ##      nets)
-        return []
+        gameCommand = {
+            "move": {"x": 1, "y": 2},
+            "timestring": datetime.now(tz=timezone.utc).isoformat()
+        }
+        return gameCommand
 
 
 async def main():
