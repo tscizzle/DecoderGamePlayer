@@ -10,9 +10,6 @@ const initializeGame = ({ parent }) => {
     scene: [MainScene],
     physics: {
       default: "arcade",
-      arcade: {
-        debug: true,
-      },
     },
     type: Phaser.AUTO,
     parent,

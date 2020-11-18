@@ -11,7 +11,11 @@ class MainScene extends Phaser.Scene {
   constructor() {
     super("MainScene");
 
-    connect({ host: this.PLAYER_WS_HOST, port: this.PLAYER_WS_PORT });
+    connect({
+      host: this.PLAYER_WS_HOST,
+      port: this.PLAYER_WS_PORT,
+      onmessage: (msg) => console.log(msg),
+    });
   }
 
   /* MAIN PHASER METHODS */

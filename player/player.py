@@ -1,7 +1,5 @@
 import json
 import asyncio
-from threading import Thread
-import time
 
 import websockets
 import numpy as np
@@ -34,29 +32,36 @@ class Player:
         self.wsPort = wsPort
         # How many things can we measure (e.g. how many sensors, or electrodes, etc.).
         self.numChannels = numChannels
-        # Current readings of the many sensors.
+        # Current readings of the sensors.
         self.measurements = np.zeros(numChannels)
-        # How often do we read the sensors and update our measurements.
-        self.measurementInterval = 0.01
-        self.measurementInterval = 1
         # Latest state we've heard from the game.
         self.gameState = None
+        # Decoder trained to look at the measurements and decide what to do in the game.
+        self.decoder = Decoder()
+        # WebSocket with which to send messages to the game.
+        self.websocket = None
 
-    def start(self):
+    async def start(self):
         """Kick off the various loops this player performs."""
-        # Start repeatedly taking measurements.
-        Thread(target=self.measurementLoop, daemon=True).start()
-        # Start listening for WebSocket connections and messages.
-        self.startWebSocketServer(self.wsHost, self.wsPort)
+        # Task for repeatedly taking measurements.
+        measurementCoro = asyncio.create_task(self.measurementLoop())
+        # Task for repeatedly decoding the measurements and sending game commands.
+        decoderCoro = asyncio.create_task(self.decoderLoop())
+        # Task for listening for WebSocket connections and messages.
+        wsServerCoro = websockets.serve(
+            self.connectionHandler, self.wsHost, self.wsPort
+        )
+        await asyncio.gather(measurementCoro, decoderCoro, wsServerCoro)
 
-    def measurementLoop(self):
+    async def measurementLoop(self):
         """Repeatedly read the sensors and store the values we see. We pretend that the
         player is playing the game and thus the measurements we get depend on what is
         happening in the game.
         """
+        measurementInterval = 0.01
         while True:
             self.updateMeasurements(self.gameState)
-            time.sleep(self.measurementInterval)
+            await asyncio.sleep(measurementInterval)
 
     def updateMeasurements(self, gameState):
         """Based on the state of the game, generate new values for this player's current
@@ -71,17 +76,19 @@ class Player:
         ##      value is taken.
         self.measurements = np.random.rand(self.numChannels)
 
-    def startWebSocketServer(self, host, port):
-        """Start the WebSocket server which connects with the game to receive
-        updates.
-
-        :param str host:
-        :param int port:
+    async def decoderLoop(self):
+        """Repeatedly decode the current measurements to generate commands to send to
+        the game, since the measurements should hold the info (in a non-obvious way,
+        hence the need for the decoder) of what's happening in the game.
         """
-        startServer = websockets.serve(self.connectionHandler, host, port)
-
-        asyncio.get_event_loop().run_until_complete(startServer)
-        asyncio.get_event_loop().run_forever()
+        gameCommandInterval = 0.01
+        while True:
+            gameCommands = self.decoder.decode(self.measurements)
+            ## TODO: make this use gameCommands, so the player is actually playing the
+            ##      game according to the decoder's output.
+            if self.websocket is not None:
+                await self.websocket.send(json.dumps({"move": {"x": 1, "y": -2}}))
+            await asyncio.sleep(gameCommandInterval)
 
     async def connectionHandler(self, websocket, path):
         """Called once per connection to this component's WebSocket server. Simply keep
@@ -93,6 +100,9 @@ class Player:
         :param str path:
         """
         _ = path
+        # Save this WebSocket on the class, for sending messages.
+        self.websocket = websocket
+        # Forever loop and receive incoming WebSocket messages.
         async for message in websocket:
             messageDict = json.loads(message)
             self.messageHandler(messageDict)
@@ -120,18 +130,25 @@ class Decoder:
 
         :param np.array measurements: same structure as Player.measurements
 
-        :return gameCommands: see WebSocket API of the game for how to structure
+        :return dict[] gameCommands: see WebSocket API of the game for how to structure
             commands
         """
-        pass
+        ## TODO: make this actually figure out what `measurements` is saying about the
+        ##      game (this is where we'll employ our learning techniques, like neural
+        ##      nets)
+        return []
 
 
-def main():
+async def main():
     HOST = "localhost"
     PORT = 1530
 
-    Player(HOST, PORT).start()
+    print("\nStarting player...\n")
+    await Player(HOST, PORT).start()
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("\nReceived interrupt. Ending process...\n")
