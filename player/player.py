@@ -7,13 +7,6 @@ import websockets.exceptions
 import numpy as np
 
 
-## TODO: do we need this, or can we see errors inside messageHandler?
-# import logging
-# logger = logging.getLogger('websockets.server')
-# logger.setLevel(logging.ERROR)
-# logger.addHandler(logging.StreamHandler())
-
-
 class Player:
     """Fake player of game.
 

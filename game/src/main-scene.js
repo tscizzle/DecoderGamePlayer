@@ -84,7 +84,6 @@ class MainScene extends Phaser.Scene {
     direction, then delete the grabbed keys from this.queuedCommands (this
     keys technique avoids concurrency issues like a normal array would have).
     */
-    console.log(_.size(this.queuedCommands));
     // Set the magnitude based on the configured speed.
     direction.normalize().scale(this.MOVE_GAIN);
     // Move the player.

@@ -1,15 +1,11 @@
 let ws = null;
-let reconnectTimerId = null;
 
 export const connect = ({ host, port, handleMessage }) => {
+  console.info("Attempting connection to player ws server...");
   ws = new WebSocket(`ws://${host}:${port}`);
 
-  ws.onopen = (ev) => {
-    // When socket opens, stop attempting reconnect.
-    if (reconnectTimerId) {
-      clearInterval(reconnectTimerId);
-      reconnectTimerId = null;
-    }
+  ws.onopen = () => {
+    console.info("Connection to player ws server opened.");
   };
 
   if (handleMessage) {
@@ -19,12 +15,9 @@ export const connect = ({ host, port, handleMessage }) => {
     };
   }
 
-  ws.onclose = (ev) => {
-    // When socket closes, begin periodically attempting reconnect.
-    reconnectTimerId = setInterval(
-      () => connect({ host, port, onmessage }),
-      5000
-    );
+  ws.onclose = () => {
+    console.info("Connection to player ws server closed.");
+    connect({ host, port, onmessage });
   };
 };
 
