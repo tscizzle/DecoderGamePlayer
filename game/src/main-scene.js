@@ -148,12 +148,12 @@ class MainScene extends Phaser.Scene {
     const gameState = {
       playerCursor: {
         x: this.playerCursor.body.x,
-        y: this.playerCursor.body.y,
+        y: GAME_HEIGHT - this.playerCursor.body.y,
         radius: this.PLAYER_SIZE,
       },
       target: {
         x: this.target.body.x,
-        y: this.target.body.y,
+        y: GAME_HEIGHT - this.target.body.y,
         radius: this.PLAYER_SIZE,
       },
     };

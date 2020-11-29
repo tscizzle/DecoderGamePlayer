@@ -4,6 +4,7 @@ import asyncio
 import websockets
 import websockets.exceptions
 import numpy as np
+from matplotlib import pyplot as plt
 
 from decoder import Decoder
 from misc_helpers import shiftSamples
@@ -18,42 +19,43 @@ class Player:
     Hosts a WebSocket server with which to receive messages from other components.
     """
 
-    def __init__(
-        self,
-        wsHost,
-        wsPort,
-        numChannels=192,
-        restingMeansRange=(-10, 10),
-        restingStdDevRange=(0.1, 0.3),
-        measurementInterval_sec=0.01,
-    ):
+    def __init__(self, wsHost, wsPort):
         """
         :param str wsHost: ip address where this player's ws server can be reached
         :param int wsPort: port where this player's ws server can be reached
-        :param int numChannels: e.g. number of electrodes we are measuring
-        :param (float, float) restingMeansRange: interval from which to choose random
-            means for the channels
-        :param (float, float) restingStdDevRange: interval from which to choose random
-            standard deviations for the channels
-        :param float measurementInterval_sec: seconds between each sampling of the
-            player's state
         """
         # How many things can we measure (e.g. how many sensors, or electrodes, etc.).
-        self.numChannels = numChannels
+        self.numChannels = 192
         # Generator of randomness.
         self.randGenerator = np.random.default_rng()
         # Current readings of the sensors.
-        self.measurements = None
+        self.currentMeasurements = None
+        # Keep some recent history of measurements.
+        self.historicalMeasurements = np.empty((0, self.numChannels))
+        # How many steps of historical measurements to remember.
+        self.measurementHistoryLength = 30
         # Mean value of each channel when no input from game.
+        self.restingMeansRange = (-10, 10)
         self.restingMeans = shiftSamples(
-            self.randGenerator.random(self.numChannels), restingMeansRange
+            self.randGenerator.random(self.numChannels), self.restingMeansRange
         )
         # Standard deviation of each channel when no input from game.
+        self.restingStdDevsRange = (0.1, 0.3)
         self.restingStdDevs = shiftSamples(
-            self.randGenerator.random(self.numChannels), restingStdDevRange
+            self.randGenerator.random(self.numChannels), self.restingStdDevsRange
         )
-        # Seconds between each sampling of the player's state.
-        self.measurementInterval_sec = measurementInterval_sec
+        # For each of the 4 cursor directions, have a channel associated with it.
+        random4Channels = self.randGenerator.choice(
+            self.numChannels, size=4, replace=False
+        )
+        self.directionTunedIndices = {
+            "up": random4Channels[0],
+            "right": random4Channels[1],
+            "down": random4Channels[2],
+            "left": random4Channels[3],
+        }
+        # How much a direction-tuned channel's mean changes.
+        self.directionTunedMeanShift = 4
 
         # Decoder trained to look at the measurements and decide what to do in the game.
         self.decoder = Decoder()
@@ -66,6 +68,25 @@ class Player:
         # Latest state we've heard from the game.
         self.gameState = None
 
+        # Real-time visualization of measurements.
+        numSpecialChannels = 4  # currently just 4 direction-tuned channels
+        yMin = self.restingMeansRange[0] - (self.restingStdDevsRange[1] * 3)
+        yMax = self.restingMeansRange[1] + (self.restingStdDevsRange[1] * 3)
+        self.lines = {}
+        self.fig, self.axs = plt.subplots(numSpecialChannels)
+        self.fig.suptitle("Historical Measurements")
+        idx = 0
+        for direction, channelIdx in self.directionTunedIndices.items():
+            self.axs[idx].set_title(f"Channel {channelIdx} (tuned to '{direction}')")
+            self.axs[idx].set_xlim((0, self.measurementHistoryLength))
+            self.axs[idx].set_ylim((yMin, yMax))
+            (line,) = self.axs[idx].plot([])
+            self.lines[direction] = line
+            idx += 1
+        plt.tight_layout()  # auto-adjust margins between subplots
+        plt.ion()  # allow updating data in real-time
+        plt.show()
+
     async def start(self):
         """Kick off the various loops this player performs."""
         # Task for repeatedly taking measurements.
@@ -76,16 +97,23 @@ class Player:
         wsServerCoro = websockets.serve(
             self.connectionHandler, self.wsHost, self.wsPort
         )
-        await asyncio.gather(measurementCoro, decoderCoro, wsServerCoro)
+        # Task for real-time data visualization.
+        visualizationCoro = asyncio.create_task(self.visualizationLoop())
+
+        # Run all the tasks.
+        await asyncio.gather(
+            measurementCoro, decoderCoro, wsServerCoro, visualizationCoro
+        )
 
     async def measurementLoop(self):
         """Repeatedly read the sensors and store the values we see. We pretend that the
         player is playing the game and thus the measurements we get depend on what is
         happening in the game.
         """
+        measurementInterval = 0.01
         while True:
             self.updateMeasurements(self.gameState)
-            await asyncio.sleep(self.measurementInterval_sec)
+            await asyncio.sleep(measurementInterval)
 
     def updateMeasurements(self, gameState):
         """Based on the state of the game, generate new values for this player's current
@@ -94,15 +122,48 @@ class Player:
         :param dict gameState: see API documentation in README for structure of these
             game state updates sent via WebSocket
         """
+        if gameState is None:
+            return
+
+        # "Measure" each channel, by getting a random value based on the "resting" mean
+        # and standard deviation for each channel.
         newMeasurements = self.randGenerator.normal(
             self.restingMeans, self.restingStdDevs
         )
 
-        ## TODO: when gameState["cursor"] position is to the left of gameState["target"]
-        ##      then resample for certain indices with a different special mean. Do this
-        ##      for each of left, right, up, down.
+        # Depending on what direction the target is from the player cursor, have some
+        # channels (the direction-tuned ones) use a different mean.
+        playerX = gameState["playerCursor"]["x"]
+        playerY = gameState["playerCursor"]["y"]
+        targetX = gameState["target"]["x"]
+        targetY = gameState["target"]["y"]
+        channelsWithShiftedMean = []
+        if targetY > playerY:
+            channelIdx = self.directionTunedIndices["up"]
+            channelsWithShiftedMean.append(channelIdx)
+        elif targetY < playerY:
+            channelIdx = self.directionTunedIndices["down"]
+            channelsWithShiftedMean.append(channelIdx)
+        if targetX > playerX:
+            channelIdx = self.directionTunedIndices["right"]
+            channelsWithShiftedMean.append(channelIdx)
+        elif targetX < playerX:
+            channelIdx = self.directionTunedIndices["left"]
+            channelsWithShiftedMean.append(channelIdx)
+        # Resample for the relevant direction-tuned channels, with their new means.
+        for channelIdx in channelsWithShiftedMean:
+            newMean = self.restingMeans[channelIdx] + self.directionTunedMeanShift
+            stdDev = self.restingStdDevs[channelIdx]
+            newMeasurements[channelIdx] = self.randGenerator.normal(newMean, stdDev)
 
-        self.measurements = newMeasurements
+        # Update currentMeasurements.
+        self.currentMeasurements = newMeasurements
+        # Update historicalMeasurements.
+        self.historicalMeasurements = np.vstack(
+            [self.historicalMeasurements, newMeasurements]
+        )
+        if len(self.historicalMeasurements) > self.measurementHistoryLength:
+            self.historicalMeasurements = self.historicalMeasurements[1:]
 
     async def decoderLoop(self):
         """Repeatedly decode the current measurements to generate commands to send to
@@ -111,8 +172,8 @@ class Player:
         """
         gameCommandInterval = 0.01
         while True:
-            if self.measurements is not None and self.websocket is not None:
-                gameCommand = self.decoder.decode(self.measurements)
+            if self.currentMeasurements is not None and self.websocket is not None:
+                gameCommand = self.decoder.decode(self.currentMeasurements)
                 msgDict = {"TYPE": "GAME_COMMAND", "PAYLOAD": gameCommand}
                 msg = json.dumps(msgDict)
                 try:
@@ -148,13 +209,27 @@ class Player:
             gameState = messageDict["PAYLOAD"]["gameState"]
             self.gameState = gameState
 
+    async def visualizationLoop(self):
+        """Display and update charts to visualize various data in real time."""
+        visualizationInterval = 1
+        while True:
+            for direction, channelIdx in self.directionTunedIndices.items():
+                line = self.lines[direction]
+                # Values on the same channel over time.
+                values = self.historicalMeasurements[:, channelIdx]
+                # Send the update with the most recent data
+                line.set_xdata(range(len(self.historicalMeasurements)))
+                line.set_ydata(values)
+            plt.pause(0.01)
+            await asyncio.sleep(visualizationInterval)
+
 
 async def main():
     HOST = "localhost"
     PORT = 1530
 
     print("\nStarting player...\n")
-    await Player(HOST, PORT, measurementInterval_sec=1).start()
+    await Player(HOST, PORT).start()
 
 
 if __name__ == "__main__":
