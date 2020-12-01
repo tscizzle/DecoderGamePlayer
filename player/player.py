@@ -58,7 +58,15 @@ class Player:
         self.directionTunedMeanShift = 4
 
         # Decoder trained to look at the measurements and decide what to do in the game.
-        self.decoder = Decoder()
+        self.decoder = Decoder(inputShape=(self.numChannels,), outputShape=(1,))
+        # Start off in the calibration phase, where the decoder is learning.
+        self.isCalibrating = True
+        # To train in terms of integers but control the game using its API, use these
+        # mappings between integers and game command API land.
+        self.gameCommandToIntMapping = {"up": 0, "right": 1, "down": 2, "left": 3}
+        self.intToGameCommandMapping = {
+            v: k for k, v in self.gameCommandToIntMapping.items()
+        }
 
         # Parameters of WebSocket server used to receive messages from other components.
         self.wsHost = wsHost
@@ -160,10 +168,20 @@ class Player:
         self.currentMeasurements = newMeasurements
         # Update historicalMeasurements.
         self.historicalMeasurements = np.vstack(
-            [self.historicalMeasurements, newMeasurements]
+            (self.historicalMeasurements, newMeasurements)
         )
         if len(self.historicalMeasurements) > self.measurementHistoryLength:
             self.historicalMeasurements = self.historicalMeasurements[1:]
+
+        # If calibrating, update the decoder's training data.
+        if self.isCalibrating:
+            moreVertical = abs(targetY - playerY) > abs(targetX - playerX)
+            if moreVertical:
+                correctDirection = "up" if targetY > playerY else "down"
+            else:
+                correctDirection = "right" if targetX > playerX else "left"
+            answer = np.array([self.gameCommandToIntMapping[correctDirection]])
+            self.decoder.addToTrainingData(self.currentMeasurements, answer)
 
     async def decoderLoop(self):
         """Repeatedly decode the current measurements to generate commands to send to
