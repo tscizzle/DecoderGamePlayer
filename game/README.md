@@ -48,6 +48,8 @@ A snapshot of the state of this game. The info in this snapshot should fully des
             "y": 6,
             "radius": 20
         },
-    }
+    },
+    "timestring": "2020-11-18T09:59:45.123+00:00",
+    "isCalibrating": true,
 }
 ```

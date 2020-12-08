@@ -15,8 +15,34 @@ All messages are JSON, with fields `"TYPE"` and `"PAYLOAD"`.
 
 See `game/README.md`.
 
+#### `"RESULT_OF_EVAL"`
+
+In response to the `"PYTHON_CODE"` message documented below, Player sends this message back to the inspector, with the result of the code (the string representation of the result of the expression, or the traceback in case of an exception).
+
+`"PAYLOAD"` has the following structure:
+
+```
+{
+    "result": "30"
+}
+```
+
 ### In
 
 #### `"GAME_UPDATE"`
 
 See `game/README.md`.
+
+#### `"PYTHON_CODE"`
+
+A message from the inspector script to allow evaluating Python expressions while the Player coroutines are paused, to help inspect internal variables for fun and debug purposes.
+
+If the Player coroutines are not already paused, receiving this message pauses them first. Resume the Player coroutines by sending the code `self.unpause()`.
+
+`"PAYLOAD"` has the following structure:
+
+```
+{
+    "pythonCode": "len(self.historicalMeasurements)"
+}
+```

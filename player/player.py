@@ -1,5 +1,8 @@
 import json
 import asyncio
+from datetime import datetime, timezone
+import traceback
+import time
 
 import websockets
 import websockets.exceptions
@@ -8,6 +11,10 @@ from matplotlib import pyplot as plt
 
 from decoder import Decoder
 from misc_helpers import shiftSamples
+
+
+HOST = "localhost"
+PORT = 1530
 
 
 class Player:
@@ -58,60 +65,61 @@ class Player:
         self.directionTunedMeanShift = 4
 
         # Decoder trained to look at the measurements and decide what to do in the game.
-        self.decoder = Decoder(inputShape=(self.numChannels,), outputShape=(1,))
-        # Start off in the calibration phase, where the decoder is learning.
-        self.isCalibrating = True
-        # To train in terms of integers but control the game using its API, use these
-        # mappings between integers and game command API land.
-        self.gameCommandToIntMapping = {"up": 0, "right": 1, "down": 2, "left": 3}
-        self.intToGameCommandMapping = {
-            v: k for k, v in self.gameCommandToIntMapping.items()
-        }
+        self.decoder = Decoder(inputShape=(self.numChannels,))
 
         # Parameters of WebSocket server used to receive messages from other components.
         self.wsHost = wsHost
         self.wsPort = wsPort
         # WebSocket with which to send messages to the game.
-        self.websocket = None
+        self.gameWebSocket = None
         # Latest state we've heard from the game.
         self.gameState = None
 
         # Real-time visualization of measurements.
         numSpecialChannels = 4  # currently just 4 direction-tuned channels
-        yMin = self.restingMeansRange[0] - (self.restingStdDevsRange[1] * 3)
-        yMax = self.restingMeansRange[1] + (self.restingStdDevsRange[1] * 3)
         self.lines = {}
         self.fig, self.axs = plt.subplots(numSpecialChannels)
-        self.fig.suptitle("Historical Measurements")
-        idx = 0
-        for direction, channelIdx in self.directionTunedIndices.items():
-            self.axs[idx].set_title(f"Channel {channelIdx} (tuned to '{direction}')")
-            self.axs[idx].set_xlim((0, self.measurementHistoryLength))
-            self.axs[idx].set_ylim((yMin, yMax))
-            (line,) = self.axs[idx].plot([])
-            self.lines[direction] = line
-            idx += 1
-        plt.tight_layout()  # auto-adjust margins between subplots
-        plt.ion()  # allow updating data in real-time
-        plt.show()
+        # self.initializeVisualization()
+
+        # Allow pausing of all coroutines to let a human inspect things.
+        self.isPaused = False
 
     async def start(self):
         """Kick off the various loops this player performs."""
-        # Task for repeatedly taking measurements.
-        measurementCoro = asyncio.create_task(self.measurementLoop())
-        # Task for repeatedly decoding the measurements and sending game commands.
-        decoderCoro = asyncio.create_task(self.decoderLoop())
-        # Task for listening for WebSocket connections and messages.
-        wsServerCoro = websockets.serve(
-            self.connectionHandler, self.wsHost, self.wsPort
-        )
-        # Task for real-time data visualization.
-        visualizationCoro = asyncio.create_task(self.visualizationLoop())
+        coroutines = [
+            # Task for taking measurements.
+            asyncio.create_task(self.measurementLoop()),
+            # Task for training the model.
+            asyncio.create_task(self.trainingLoop()),
+            # Task for decoding the measurements and sending game commands.
+            asyncio.create_task(self.decodingLoop()),
+            # Task for listening for WebSocket connections and messages.
+            websockets.serve(self.connectionHandler, self.wsHost, self.wsPort),
+            # Task for real-time data visualization.
+            # asyncio.create_task(self.visualizationLoop()),
+        ]
 
         # Run all the tasks.
-        await asyncio.gather(
-            measurementCoro, decoderCoro, wsServerCoro, visualizationCoro
-        )
+        await asyncio.gather(*coroutines)
+
+    async def loopWhilePaused(self):
+        """Block until the program is unpaused.
+
+        Call this at the top of every coroutine's loop to allow pausing of everything.
+        """
+        pauseInterval = 0.01
+        while self.isPaused:
+            await asyncio.sleep(pauseInterval)
+
+    def pause(self):
+        """Pause all the coroutine loops."""
+        print("Pausing...")
+        self.isPaused = True
+
+    def unpause(self):
+        """Unpause all the coroutine loops."""
+        print("Unpausing...")
+        self.isPaused = False
 
     async def measurementLoop(self):
         """Repeatedly read the sensors and store the values we see. We pretend that the
@@ -120,6 +128,7 @@ class Player:
         """
         measurementInterval = 0.01
         while True:
+            await self.loopWhilePaused()
             self.updateMeasurements(self.gameState)
             await asyncio.sleep(measurementInterval)
 
@@ -174,30 +183,51 @@ class Player:
             self.historicalMeasurements = self.historicalMeasurements[1:]
 
         # If calibrating, update the decoder's training data.
-        if self.isCalibrating:
+        if self.gameState["isCalibrating"]:
             moreVertical = abs(targetY - playerY) > abs(targetX - playerX)
             if moreVertical:
-                correctDirection = "up" if targetY > playerY else "down"
+                answer = "up" if targetY > playerY else "down"
             else:
-                correctDirection = "right" if targetX > playerX else "left"
-            answer = np.array([self.gameCommandToIntMapping[correctDirection]])
+                answer = "right" if targetX > playerX else "left"
             self.decoder.addToTrainingData(self.currentMeasurements, answer)
 
-    async def decoderLoop(self):
+    async def trainingLoop(self):
+        """Periodically train the model on the training data received so far. Don't
+        re-train if no new data has arrived.
+        """
+        trainingInterval = 1
+        while True:
+            await self.loopWhilePaused()
+            if self.decoder.isNewDataSinceLastTrained:
+                self.decoder.train()
+            await asyncio.sleep(trainingInterval)
+
+    async def decodingLoop(self):
         """Repeatedly decode the current measurements to generate commands to send to
         the game, since the measurements should hold the info (in a non-obvious way,
         hence the need for the decoder) of what's happening in the game.
         """
         gameCommandInterval = 0.01
         while True:
-            if self.currentMeasurements is not None and self.websocket is not None:
+            await self.loopWhilePaused()
+            if (
+                self.currentMeasurements is not None
+                and self.gameWebSocket is not None
+                and self.decoder.hasBeenTrainedAtAll
+            ):
+                timestring = datetime.now(tz=timezone.utc).isoformat()
                 gameCommand = self.decoder.decode(self.currentMeasurements)
-                msgDict = {"TYPE": "GAME_COMMAND", "PAYLOAD": gameCommand}
-                msg = json.dumps(msgDict)
-                try:
-                    await self.websocket.send(msg)
-                except websockets.exceptions.ConnectionClosed:
-                    self.websocket = None
+                if gameCommand is not None:
+                    gameCommand["timestring"] = timestring
+                    msgDict = {"TYPE": "GAME_COMMAND", "PAYLOAD": gameCommand}
+                    msg = json.dumps(msgDict)
+                    try:
+                        await self.gameWebSocket.send(msg)
+                    except websockets.exceptions.ConnectionClosed:
+                        print(
+                            "In decoder loop, found Game WebSocket connection closed."
+                        )
+                        self.gameWebSocket = None
             await asyncio.sleep(gameCommandInterval)
 
     async def connectionHandler(self, websocket, path):
@@ -210,27 +240,68 @@ class Player:
         :param str path:
         """
         _ = path
-        # Save this WebSocket on the class, for sending messages.
-        self.websocket = websocket
+        print("WebSocket connection open.")
         # Forever loop and receive incoming WebSocket messages.
         async for message in websocket:
             messageDict = json.loads(message)
-            self.messageHandler(messageDict)
+            await self.messageHandler(messageDict, websocket)
+        print("WebSocket connection closed.")
 
-    def messageHandler(self, messageDict):
+    async def messageHandler(self, messageDict, websocket):
         """Called once per incoming WebSocket message.
 
         :param dict messageDict: Keys "TYPE" and "PAYLOAD". More details on the API
             found in `player/README.md`.
+        :param websockets.WebSocketServerProtocol websocket:
         """
+        if messageDict["TYPE"] == "PYTHON_CODE":
+            pythonCode = messageDict["PAYLOAD"]["pythonCode"]
+            if not self.isPaused:
+                self.pause()
+                time.sleep(0.5)  # Give coroutines a chance to pause.
+            try:
+                print(f"Evaluating `{pythonCode}`...")
+                result = repr(eval(pythonCode))
+                print("Completed.")
+            except:
+                result = traceback.format_exc()
+                print("Errored.")
+            msgDict = {"TYPE": "RESULT_OF_EVAL", "PAYLOAD": {"result": result}}
+            msg = json.dumps(msgDict)
+            await websocket.send(msg)
+
+        # If paused, don't handle any messages, except the PYTHON_CODE message, so that
+        # it is still possible to unpause things.
+        if self.isPaused:
+            return
+
         if messageDict["TYPE"] == "GAME_UPDATE":
             gameState = messageDict["PAYLOAD"]["gameState"]
             self.gameState = gameState
+            self.gameWebSocket = websocket
+
+    def initializeVisualization(self):
+        """Create the figures used for real-time visualizations."""
+        yMin = self.restingMeansRange[0] - (self.restingStdDevsRange[1] * 3)
+        yMax = self.restingMeansRange[1] + (self.restingStdDevsRange[1] * 3)
+        self.fig.suptitle("Historical Measurements")
+        idx = 0
+        for direction, channelIdx in self.directionTunedIndices.items():
+            self.axs[idx].set_title(f"Channel {channelIdx} (tuned to '{direction}')")
+            self.axs[idx].set_xlim((0, self.measurementHistoryLength))
+            self.axs[idx].set_ylim((yMin, yMax))
+            (line,) = self.axs[idx].plot([])
+            self.lines[direction] = line
+            idx += 1
+        plt.tight_layout()  # auto-adjust margins between subplots
+        plt.ion()  # allow updating data in real-time
+        plt.show()
 
     async def visualizationLoop(self):
         """Display and update charts to visualize various data in real time."""
         visualizationInterval = 1
         while True:
+            await self.loopWhilePaused()
             for direction, channelIdx in self.directionTunedIndices.items():
                 line = self.lines[direction]
                 # Values on the same channel over time.
@@ -242,16 +313,15 @@ class Player:
             await asyncio.sleep(visualizationInterval)
 
 
-async def main():
-    HOST = "localhost"
-    PORT = 1530
+def main():
+    player = Player(HOST, PORT)
 
-    print("\nStarting player...\n")
-    await Player(HOST, PORT).start()
+    try:
+        print("Starting player...")
+        asyncio.run(player.start())
+    except KeyboardInterrupt:
+        print("\nReceived keyboard interrupt...")
 
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        print("\nReceived interrupt. Ending process...\n")
+    main()
