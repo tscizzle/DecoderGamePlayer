@@ -16,6 +16,8 @@ from misc_helpers import shiftSamples
 HOST = "localhost"
 PORT = 1530
 
+glob = {}
+
 
 class Player:
     """Fake player of game.
@@ -259,10 +261,19 @@ class Player:
             if not self.isPaused:
                 self.pause()
                 time.sleep(0.5)  # Give coroutines a chance to pause.
+            result = None
+            print(f"Evaluating `{pythonCode}`...")
             try:
-                print(f"Evaluating `{pythonCode}`...")
                 result = repr(eval(pythonCode))
                 print("Completed.")
+            except SyntaxError:
+                print(f"Got SyntaxError, so trying `exec('{pythonCode}')`")
+                try:
+                    exec(pythonCode)
+                    print("Completed.")
+                except:
+                    result = traceback.format_exc()
+                    print("Errored.")
             except:
                 result = traceback.format_exc()
                 print("Errored.")
