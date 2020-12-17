@@ -78,7 +78,7 @@ class MainScene extends Phaser.Scene {
 
   update() {
     /* Player movement */
-    // If calibrating, hard-control the movement instead of taking any input.
+    // If calibrating, hard-code the movement instead of taking any input.
     const timeSinceCalibrationStarted = new Date() - this.calibrateStartTime;
     this.isCalibrating =
       timeSinceCalibrationStarted < this.CALIBRATION_TIME_LENGTH;
@@ -96,23 +96,42 @@ class MainScene extends Phaser.Scene {
         this.SCREEN_CENTER.y + Math.sin(angle) * this.CALIBRATION_RADIUS;
       this.playerCursor.setPosition(cursorX, cursorY);
     } else {
-      // Set the direction vector based on user input.
-      const direction = new Phaser.Math.Vector2();
+      let direction = new Phaser.Math.Vector2(0, 0);
+      // Set the direction based on received commands.
+      if (!_.isEmpty(this.queuedCommands)) {
+        const commandIds = _.keys(this.queuedCommands);
+        const commands = _.map(
+          commandIds,
+          (commandId) => this.queuedCommands[commandId]
+        );
+        const latestCommand = _.maxBy(
+          commands,
+          ({ timestring }) => new Date(timestring)
+        );
+        direction.x = latestCommand.move.x;
+        direction.y = -latestCommand.move.y;
+        // Remove the commands we've processed.
+        _.each(
+          commandIds,
+          (commandId) => delete this.queuedCommands[commandId]
+        );
+      }
+      // Set the direction vector based on user input. (If there is any user
+      // input, it overrides received commands.)
+      const userInputDirection = new Phaser.Math.Vector2();
       if (this.moveControls.left.isDown) {
-        direction.x = -1;
+        userInputDirection.x = -1;
       } else if (this.moveControls.right.isDown) {
-        direction.x = 1;
+        userInputDirection.x = 1;
       }
       if (this.moveControls.down.isDown) {
-        direction.y = 1;
+        userInputDirection.y = 1;
       } else if (this.moveControls.up.isDown) {
-        direction.y = -1;
+        userInputDirection.y = -1;
       }
-      /* TODO: if there is anything in this.queuedCommands, grab the keys, take
-      the command with the latest timestring, apply it to get the movement
-      direction, then delete the grabbed keys from this.queuedCommands (this
-      keys technique avoids concurrency issues like a normal array would have).
-      */
+      if (userInputDirection.length() > 0) {
+        direction = userInputDirection;
+      }
       // Set the magnitude based on the configured speed.
       direction.normalize().scale(this.MOVE_GAIN);
       // Move the player.

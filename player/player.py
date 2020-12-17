@@ -16,7 +16,8 @@ from misc_helpers import shiftSamples
 HOST = "localhost"
 PORT = 1530
 
-glob = {}
+# Global storage so a user using inspector.py can save variables.
+g = {}
 
 
 class Player:
@@ -40,9 +41,9 @@ class Player:
         # Current readings of the sensors.
         self.currentMeasurements = None
         # Keep some recent history of measurements.
-        self.historicalMeasurements = np.empty((0, self.numChannels))
-        # How many steps of historical measurements to remember.
-        self.measurementHistoryLength = 30
+        self.recentMeasurements = np.empty((0, self.numChannels))
+        # How many steps of recent measurements to remember.
+        self.lengthOfRecentMeasurements = 30
         # Mean value of each channel when no input from game.
         self.restingMeansRange = (-10, 10)
         self.restingMeans = shiftSamples(
@@ -177,12 +178,10 @@ class Player:
 
         # Update currentMeasurements.
         self.currentMeasurements = newMeasurements
-        # Update historicalMeasurements.
-        self.historicalMeasurements = np.vstack(
-            (self.historicalMeasurements, newMeasurements)
-        )
-        if len(self.historicalMeasurements) > self.measurementHistoryLength:
-            self.historicalMeasurements = self.historicalMeasurements[1:]
+        # Update recentMeasurements.
+        self.recentMeasurements = np.vstack((self.recentMeasurements, newMeasurements))
+        if len(self.recentMeasurements) > self.lengthOfRecentMeasurements:
+            self.recentMeasurements = self.recentMeasurements[1:]
 
         # If calibrating, update the decoder's training data.
         if self.gameState["isCalibrating"]:
@@ -295,11 +294,11 @@ class Player:
         """Create the figures used for real-time visualizations."""
         yMin = self.restingMeansRange[0] - (self.restingStdDevsRange[1] * 3)
         yMax = self.restingMeansRange[1] + (self.restingStdDevsRange[1] * 3)
-        self.fig.suptitle("Historical Measurements")
+        self.fig.suptitle("Recent Measurements")
         idx = 0
         for direction, channelIdx in self.directionTunedIndices.items():
             self.axs[idx].set_title(f"Channel {channelIdx} (tuned to '{direction}')")
-            self.axs[idx].set_xlim((0, self.measurementHistoryLength))
+            self.axs[idx].set_xlim((0, self.lengthOfRecentMeasurements))
             self.axs[idx].set_ylim((yMin, yMax))
             (line,) = self.axs[idx].plot([])
             self.lines[direction] = line
@@ -316,9 +315,9 @@ class Player:
             for direction, channelIdx in self.directionTunedIndices.items():
                 line = self.lines[direction]
                 # Values on the same channel over time.
-                values = self.historicalMeasurements[:, channelIdx]
+                values = self.recentMeasurements[:, channelIdx]
                 # Send the update with the most recent data
-                line.set_xdata(range(len(self.historicalMeasurements)))
+                line.set_xdata(range(len(self.recentMeasurements)))
                 line.set_ydata(values)
             plt.pause(0.01)
             await asyncio.sleep(visualizationInterval)
