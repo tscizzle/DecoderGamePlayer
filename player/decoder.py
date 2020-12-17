@@ -47,9 +47,9 @@ class Decoder:
             self.svmModel.fit(self.trainingInputs, self.trainingAnswers)
         except ValueError as e:
             print(f"Error while fitting model: {e}")
-            return
-        self.isNewDataSinceLastTrained = False
-        self.hasBeenTrainedAtAll = True
+        else:
+            self.isNewDataSinceLastTrained = False
+            self.hasBeenTrainedAtAll = True
 
     def decode(self, measurements):
         """Given measurements of the player, predict what that player is trying to do in
