@@ -45,7 +45,7 @@ class Player:
         # How many steps of recent measurements to remember.
         self.lengthOfRecentMeasurements = 30
         # Mean value of each channel when no input from game.
-        self.restingMeansRange = (-10, 10)
+        self.restingMeansRange = (5, 25)
         self.restingMeans = shiftSamples(
             self.randGenerator.random(self.numChannels), self.restingMeansRange
         )
@@ -150,31 +150,25 @@ class Player:
         newMeasurements = self.randGenerator.normal(
             self.restingMeans, self.restingStdDevs
         )
+        # Keep values non-negative, as if they were counting something, like spike rate.
+        newMeasurements = newMeasurements.clip(min=0)
 
-        # Depending on what direction the target is from the player cursor, have some
-        # channels (the direction-tuned ones) use a different mean.
+        # Depending on what direction the target is from the player cursor, have a
+        # channel (a direction-tuned one) use a different mean.
         playerX = gameState["playerCursor"]["x"]
         playerY = gameState["playerCursor"]["y"]
         targetX = gameState["target"]["x"]
         targetY = gameState["target"]["y"]
-        channelsWithShiftedMean = []
-        if targetY > playerY:
-            channelIdx = self.directionTunedIndices["up"]
-            channelsWithShiftedMean.append(channelIdx)
-        elif targetY < playerY:
-            channelIdx = self.directionTunedIndices["down"]
-            channelsWithShiftedMean.append(channelIdx)
-        if targetX > playerX:
-            channelIdx = self.directionTunedIndices["right"]
-            channelsWithShiftedMean.append(channelIdx)
-        elif targetX < playerX:
-            channelIdx = self.directionTunedIndices["left"]
-            channelsWithShiftedMean.append(channelIdx)
-        # Resample for the relevant direction-tuned channels, with their new means.
-        for channelIdx in channelsWithShiftedMean:
-            newMean = self.restingMeans[channelIdx] + self.directionTunedMeanShift
-            stdDev = self.restingStdDevs[channelIdx]
-            newMeasurements[channelIdx] = self.randGenerator.normal(newMean, stdDev)
+        moreVertical = abs(targetY - playerY) > abs(targetX - playerX)
+        if moreVertical:
+            direction = "up" if targetY > playerY else "down"
+        else:
+            direction = "right" if targetX > playerX else "left"
+        channelIdx = self.directionTunedIndices[direction]
+        # Resample for the relevant direction-tuned channel, with its new mean.
+        newMean = self.restingMeans[channelIdx] + self.directionTunedMeanShift
+        stdDev = self.restingStdDevs[channelIdx]
+        newMeasurements[channelIdx] = self.randGenerator.normal(newMean, stdDev)
 
         # Update currentMeasurements.
         self.currentMeasurements = newMeasurements
@@ -185,12 +179,7 @@ class Player:
 
         # If calibrating, update the decoder's training data.
         if self.gameState["isCalibrating"]:
-            moreVertical = abs(targetY - playerY) > abs(targetX - playerX)
-            if moreVertical:
-                answer = "up" if targetY > playerY else "down"
-            else:
-                answer = "right" if targetX > playerX else "left"
-            self.decoder.addToTrainingData(self.currentMeasurements, answer)
+            self.decoder.addToTrainingData(self.currentMeasurements, direction)
 
     async def trainingLoop(self):
         """Periodically train the model on the training data received so far. Don't
