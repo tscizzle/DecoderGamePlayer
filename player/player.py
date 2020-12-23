@@ -1,3 +1,4 @@
+import os
 import json
 import asyncio
 from datetime import datetime, timezone
@@ -29,10 +30,11 @@ class Player:
     Hosts a WebSocket server with which to receive messages from other components.
     """
 
-    def __init__(self, wsHost, wsPort):
+    def __init__(self, wsHost, wsPort, doVisualization=False, doLogging=False):
         """
         :param str wsHost: ip address where this player's ws server can be reached
         :param int wsPort: port where this player's ws server can be reached
+        :param bool doVisualization:
         """
         # How many things can we measure (e.g. how many sensors, or electrodes, etc.).
         self.numChannels = 192
@@ -82,14 +84,22 @@ class Player:
         numSpecialChannels = 4  # currently just 4 direction-tuned channels
         self.lines = {}
         self.fig, self.axs = plt.subplots(numSpecialChannels)
-        # self.initializeVisualization()
+        self.doVisualization = doVisualization
+        if self.doVisualization:
+            self.initializeVisualization()
+
+        # Logging.
+        today = datetime.today().strftime("%Y-%m-%d")
+        self.logFilePath = os.path.join("log", f"{today}.txt")
+        self.logFile = open(self.logFilePath, "a+")
+        self.doLogging = doLogging
 
         # Allow pausing of all coroutines to let a human inspect things.
         self.isPaused = False
 
     async def start(self):
         """Kick off the various loops this player performs."""
-        coroutines = [
+        tasks = [
             # Task for taking measurements.
             asyncio.create_task(self.measurementLoop()),
             # Task for training the model.
@@ -98,12 +108,20 @@ class Player:
             asyncio.create_task(self.decodingLoop()),
             # Task for listening for WebSocket connections and messages.
             websockets.serve(self.connectionHandler, self.wsHost, self.wsPort),
-            # Task for real-time data visualization.
-            # asyncio.create_task(self.visualizationLoop()),
         ]
+        # Task for real-time data visualization.
+        if self.doVisualization:
+            tasks.append(asyncio.create_task(self.visualizationLoop()))
+        # Task for logging.
+        if self.doLogging:
+            tasks.append(asyncio.create_task(self.loggingLoop()))
 
         # Run all the tasks.
-        await asyncio.gather(*coroutines)
+        await asyncio.gather(*tasks)
+
+    def tearDown(self):
+        """Clean up for the end of the program."""
+        self.logFile.close()
 
     async def loopWhilePaused(self):
         """Block until the program is unpaused.
@@ -155,15 +173,7 @@ class Player:
 
         # Depending on what direction the target is from the player cursor, have a
         # channel (a direction-tuned one) use a different mean.
-        playerX = gameState["playerCursor"]["x"]
-        playerY = gameState["playerCursor"]["y"]
-        targetX = gameState["target"]["x"]
-        targetY = gameState["target"]["y"]
-        moreVertical = abs(targetY - playerY) > abs(targetX - playerX)
-        if moreVertical:
-            direction = "up" if targetY > playerY else "down"
-        else:
-            direction = "right" if targetX > playerX else "left"
+        direction = self.getDirectionFromGameState(gameState)
         channelIdx = self.directionTunedIndices[direction]
         # Resample for the relevant direction-tuned channel, with its new mean.
         newMean = self.restingMeans[channelIdx] + self.directionTunedMeanShift
@@ -180,6 +190,30 @@ class Player:
         # If calibrating, update the decoder's training data.
         if self.gameState["isCalibrating"]:
             self.decoder.addToTrainingData(self.currentMeasurements, direction)
+
+    @staticmethod
+    def getDirectionFromGameState(gameState):
+        """Given a game state dict from the game, return the direction the player cursor
+        needs to go.
+
+        :param dict gameState: see API documentation in README for structure of these
+            game state updates sent via WebSocket
+
+        :return string direction: One of "up", "down", "right", "left". If the cursor
+            needs to go both up and right, this function returns the direction in which
+            the cursor needs to go further. Thus, North-northeast is "up" and
+            East-northeast is "right".
+        """
+        playerX = gameState["playerCursor"]["x"]
+        playerY = gameState["playerCursor"]["y"]
+        targetX = gameState["target"]["x"]
+        targetY = gameState["target"]["y"]
+        moreVertical = abs(targetY - playerY) > abs(targetX - playerX)
+        if moreVertical:
+            direction = "up" if targetY > playerY else "down"
+        else:
+            direction = "right" if targetX > playerX else "left"
+        return direction
 
     async def trainingLoop(self):
         """Periodically train the model on the training data received so far. Don't
@@ -311,15 +345,41 @@ class Player:
             plt.pause(0.01)
             await asyncio.sleep(visualizationInterval)
 
+    async def loggingLoop(self):
+        """Log measurements, game state, etc. to files."""
+        loggingInterval = 0.1
+        while True:
+            await self.loopWhilePaused()
+            if self.currentMeasurements is not None and self.gameState is not None:
+                timestring = datetime.now(tz=timezone.utc).isoformat()
+                measurements = self.currentMeasurements.tolist()
+                gameState = self.gameState
+                direction = self.getDirectionFromGameState(self.gameState)
+                logDict = {
+                    "timestring": timestring,
+                    "measurements": measurements,
+                    "gameState": gameState,
+                    "direction": direction,
+                }
+                logLine = f"{json.dumps(logDict)}\n"
+                self.logFile.write(logLine)
+            await asyncio.sleep(loggingInterval)
+
 
 def main():
-    player = Player(HOST, PORT)
+    player = Player(
+        HOST,
+        PORT,
+        doVisualization=False,
+        doLogging=False,
+    )
 
     try:
         print("Starting player...")
         asyncio.run(player.start())
     except KeyboardInterrupt:
         print("\nReceived keyboard interrupt...")
+        player.tearDown()
 
 
 if __name__ == "__main__":
