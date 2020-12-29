@@ -4,6 +4,7 @@ import asyncio
 from datetime import datetime, timezone
 import traceback
 import time
+import uuid
 
 import websockets
 import websockets.exceptions
@@ -16,6 +17,7 @@ from misc_helpers import shiftSamples
 
 HOST = "localhost"
 PORT = 1530
+LOG_FILE_PATH = os.path.join("log", f"{datetime.today().strftime('%Y-%m-%d')}.txt")
 
 # Global storage so a user using inspector.py can save variables.
 g = {}
@@ -24,8 +26,8 @@ g = {}
 class Player:
     """Fake player of game.
 
-    Pretends to have sensors which we repeatdly measure, based on the state of the game,
-    like where the cursor is and where the goal is.
+    Pretends to have sensors which we repeatedly measure, based on the state of the
+    game, like where the cursor is and where the goal is.
 
     Hosts a WebSocket server with which to receive messages from other components.
     """
@@ -89,10 +91,13 @@ class Player:
             self.initializeVisualization()
 
         # Logging.
-        today = datetime.today().strftime("%Y-%m-%d")
-        self.logFilePath = os.path.join("log", f"{today}.txt")
-        self.logFile = open(self.logFilePath, "a+")
+        self.logFile = None
         self.doLogging = doLogging
+        if self.doLogging:
+            self.logFile = open(LOG_FILE_PATH, "a+")
+
+        # Player ID to identify a given run.
+        self.playerId = str(uuid.uuid4())
 
         # Allow pausing of all coroutines to let a human inspect things.
         self.isPaused = False
@@ -121,7 +126,8 @@ class Player:
 
     def tearDown(self):
         """Clean up for the end of the program."""
-        self.logFile.close()
+        if self.doLogging:
+            self.logFile.close()
 
     async def loopWhilePaused(self):
         """Block until the program is unpaused.
@@ -352,11 +358,13 @@ class Player:
             await self.loopWhilePaused()
             if self.currentMeasurements is not None and self.gameState is not None:
                 timestring = datetime.now(tz=timezone.utc).isoformat()
+                playerId = self.playerId
                 measurements = self.currentMeasurements.tolist()
                 gameState = self.gameState
                 direction = self.getDirectionFromGameState(self.gameState)
                 logDict = {
                     "timestring": timestring,
+                    "playerId": playerId,
                     "measurements": measurements,
                     "gameState": gameState,
                     "direction": direction,
@@ -371,7 +379,7 @@ def main():
         HOST,
         PORT,
         doVisualization=False,
-        doLogging=False,
+        doLogging=True,
     )
 
     try:
