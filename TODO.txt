@@ -1,0 +1,12 @@
+Game
+- 
+
+Player
+- add model parameters to log file
+
+Decoder
+- make easy to train on past data from log file (logging both measurements and direction, i.e. trainingInputs and trainingAnswers)
+- try SVM
+    - visualize PC's of the data, and some parameters of the model that are somehow connected
+        - inspect coef_ and intercept_. are most 0, but some large (or just, non-zero) ones for the direction-tuned channels? can we make lines (or hyperplanes?) with the coefs and intercepts that separate the resting mean vs. shifted mean of a direction-tuned channel?
+- learn about and try Kalman
